@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <lcd_stm32f0.c>
 #include "stm32f0xx.h"
 /* USER CODE END Includes */
 
@@ -33,9 +34,14 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 // TODO: Add values for below variables
-#define NS        // Number of samples in LUT
-#define TIM2CLK   // STM Clock frequency
-#define F_SIGNAL  // Frequency of output analog signal
+#define NS      128  // Number of samples in LUT
+#define TIM2CLK  8000000 // STM Clock frequency
+#define F_SIGNAL  500// Frequency of output analog signal
+/*Wave form flags*/
+#define SINE_FLAG 0
+#define TRI_FLAG 1
+#define SAW_FLAG 2
+#define NUM_FLAGS 3
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -51,14 +57,44 @@ DMA_HandleTypeDef hdma_tim2_ch1;
 /* USER CODE BEGIN PV */
 // TODO: Add code for global variables, including LUTs
 
-uint32_t Sin_LUT[NS] = {};
-uint32_t saw_LUT[NS] = {};
-uint32_t triangle_LUT[NS] = {};
+uint32_t Sin_LUT[NS] = {512, 537, 562, 587, 611, 636, 660, 684, 707, 730, 753,
+		   774, 796, 816, 836, 855, 873, 890, 907, 922, 937, 950, 963, 974,
+		   984, 993, 1001, 1008, 1013, 1017, 1021, 1022, 1023, 1022,
+		   1021, 1017, 1013, 1008, 1001, 993, 984, 974, 963, 950, 937,
+		   922, 907, 890, 873, 855, 836, 816, 796, 774, 753, 730, 707, 684,
+		   660, 636, 611, 587, 562, 537, 512, 486, 461, 436, 412, 387, 363, 339,
+		   316, 293, 270, 249, 227, 207, 187, 168, 150, 133, 116, 101, 86, 73, 60,
+		   49, 39, 30, 22, 15, 10, 6, 2, 1, 0, 1, 2, 6, 10, 15, 22, 30, 39, 49, 60,
+		   73, 86, 101, 116, 133, 150, 168, 187, 207, 227, 249, 270, 293, 316, 339, 363,
+		   387, 412, 436, 461, 486};
+uint32_t saw_LUT[NS] = {0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 81, 89,
+		97, 105, 113, 121, 129, 137, 145, 153, 161, 169,
+		177, 185, 193, 201, 209, 217, 226, 234, 242, 250,
+		258, 266, 274, 282, 290, 298, 306, 314, 322, 330, 338, 346,
+		354, 362, 371, 379, 387, 395, 403, 411, 419, 427, 435, 443, 451, 459,
+		467, 475, 483, 491, 499, 507, 516, 524, 532, 540, 548, 556, 564, 572,
+		580, 588, 596, 604, 612, 620, 628, 636, 644, 652, 661, 669, 677, 685,
+		693, 701, 709, 717, 725, 733, 741, 749, 757, 765, 773, 781, 789, 797,
+		806, 814, 822, 830, 838, 846, 854, 862, 870, 878, 886, 894, 902, 910,
+		918, 926, 934, 942, 951, 959, 967, 975, 983, 991, 999, 1007, 1015, 0};
+uint32_t triangle_LUT[NS] = {0, 16, 32, 49, 65, 81, 97, 114, 130, 146,
+		162, 179, 195, 211, 227, 244, 260, 276, 292, 309, 325, 341, 357, 373,
+		390, 406, 422, 438, 455, 471, 487, 503, 520, 536, 552, 568, 585, 601,
+		617, 633, 650, 666, 682, 698, 714, 731, 747, 763, 779, 796, 812, 828,
+		844, 861, 877, 893, 909, 926, 942, 958, 974, 991, 1007, 1023, 1023,
+		1007, 991, 974, 958, 942, 926, 909, 893, 877, 861, 844, 828, 812,
+		796, 779, 763, 747, 731, 714, 698, 682, 666, 650, 633, 617, 601,
+		585, 568, 552, 536, 520, 503, 487, 471, 455, 438, 422, 406, 390,
+		373, 357, 341, 325, 309, 292, 276, 260, 244, 227, 211, 195, 179,
+		162, 146, 130, 114, 97, 81, 65, 49, 32, 16, 0};
 
 // TODO: Equation to calculate TIM2_Ticks
 
-uint32_t TIM2_Ticks = 0; // How often to write new LUT value
+uint32_t TIM2_Ticks =  (TIM2CLK / (NS * F_SIGNAL)); // How often to write new LUT value
 uint32_t DestAddress = (uint32_t) &(TIM3->CCR3); // Write LUT TO TIM3->CCR3 to modify PWM duty cycle
+uint8_t flag = 0; /*start with sine wave*/
+
+uint32_t curr_ticks, prev_ticks;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -69,6 +105,7 @@ static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 void EXTI0_1_IRQHandler(void);
+static void update_flag(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -92,6 +129,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
+  init_LCD();
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -108,19 +146,20 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   // TODO: Start TIM3 in PWM mode on channel 3
-
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
 
   // TODO: Start TIM2 in Output Compare (OC) mode on channel 1.
-
+  HAL_TIM_OC_Start(&htim2, TIM_CHANNEL_1);
 
   // TODO: Start DMA in IT mode on TIM2->CH1; Source is LUT and Dest is TIM3->CCR3; start with Sine LUT
-
+  HAL_DMA_Start_IT(&hdma_tim2_ch1, (uint32_t)Sin_LUT, DestAddress, NS);
 
   // TODO: Write current waveform to LCD ("Sine")
+  lcd_putstring("Sine");
   delay(3000);
 
   // TODO: Enable DMA (start transfer from LUT to CCR)
-
+  __HAL_TIM_ENABLE_DMA(&htim2, TIM_DMA_CC1);
 
   /* USER CODE END 2 */
 
@@ -346,17 +385,47 @@ static void MX_GPIO_Init(void)
 void EXTI0_1_IRQHandler(void)
 {
 	// TODO: Debounce using HAL_GetTick()
-
+	curr_ticks = HAL_GetTick(); /*get current number of ticks*/
+	  if ((curr_ticks - prev_ticks) > 50) {
+	    update_flag();
+	    lcd_command(CLEAR);
 
 	// TODO: Disable DMA transfer and abort IT, then start DMA in IT mode with new LUT and re-enable transfer
 	// HINT: Consider using C's "switch" function to handle LUT changes
+	    __HAL_TIM_DISABLE_DMA(&htim2, TIM_DMA_CC1);
+	        HAL_DMA_Abort_IT(&hdma_tim2_ch1);
 
+	        switch (flag) {
+	        case SINE_FLAG:
+	          HAL_DMA_Start_IT(&hdma_tim2_ch1, (uint32_t)Sin_LUT, DestAddress, NS);
+	          lcd_putstring("Sine");
+	          break;
+	        case TRI_FLAG:
+	          HAL_DMA_Start_IT(&hdma_tim2_ch1, (uint32_t)triangle_LUT, DestAddress, NS);
+	          lcd_putstring("Triangle");
+	          break;
+	        case SAW_FLAG:
+	          HAL_DMA_Start_IT(&hdma_tim2_ch1, (uint32_t)saw_LUT, DestAddress, NS);
+	          lcd_putstring("Sawtooth");
+	          break;
+
+	        default:
+	          HAL_DMA_Start_IT(&hdma_tim2_ch1, (uint32_t)Sin_LUT, DestAddress, NS);
+	          lcd_putstring("Sine");
+	          break;
+	        }
+	      }
+	      prev_ticks = curr_ticks;
+	      __HAL_TIM_ENABLE_DMA(&htim2, TIM_DMA_CC1);
 
 
 	HAL_GPIO_EXTI_IRQHandler(Button0_Pin); // Clear interrupt flags
 }
 /* USER CODE END 4 */
-
+ static void update_flag(){
+  flag++;
+  flag %= NUM_FLAGS;
+}
 /**
   * @brief  This function is executed in case of error occurrence.
   * @retval None
